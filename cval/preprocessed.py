@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore")
 
 # %%
 random_state = 42
-CHUNK_SIZE = 50000  # Размер чанка для обработки
+CHUNK_SIZE = 50_000
 
 # %%
 class MemoryEfficientCTRPreprocessor:
@@ -33,7 +33,7 @@ class MemoryEfficientCTRPreprocessor:
         self.target_encoders = {}
         self.label_encoders = {}
         self.scaler = StandardScaler()
-        self.feature_hasher = FeatureHasher(n_features=50, input_type="string")
+        self.feature_hasher = FeatureHasher(n_features=40, input_type="string")
 
         # Статистики для target encoding
         self.target_stats = {}
@@ -179,8 +179,8 @@ class MemoryEfficientCTRPreprocessor:
         for col in medium_cardinality:
             if col in chunk_df.columns and col in self.target_encoders:
                 # Use map for faster lookups
-                chunk_df[f"{col}_target"] = chunk_df[col].map(self.target_encoders[col])
-                chunk_df[f"{col}_target"] = chunk_df[f"{col}_target"].fillna(self.global_mean).astype(np.float32)
+                chunk_df[f"{col}_target"] = chunk_df[col].map(self.target_encoders[col]).astype(np.float32)
+                chunk_df[f"{col}_target"] = chunk_df[f"{col}_target"].fillna(self.global_mean)
 
         # Label encoding for low cardinality features
         low_cardinality = [
@@ -210,7 +210,7 @@ class MemoryEfficientCTRPreprocessor:
                 # Convert to DataFrame more efficiently
                 hashed_df = pd.DataFrame(
                     hashed_data.toarray().astype(np.float32),
-                    columns=[f"{col}_hash_{i}" for i in range(50)],
+                    columns=[f"{col}_hash_{i}" for i in range(40)],
                     index=chunk_df.index
                 )
                 chunk_df = pd.concat([chunk_df, hashed_df], axis=1)
@@ -230,44 +230,44 @@ class MemoryEfficientCTRPreprocessor:
         total_chunks = (total_rows + self.chunk_size - 1) // self.chunk_size
         print(f"Total rows: {total_rows:,}, Total chunks: {total_chunks}")
 
-        # First pass: collect statistics (only for training data)
-        if is_train:
-            print("Pass 1/2: Collecting statistics...")
-            chunk_iter = pd.read_csv(file_path, chunksize=self.chunk_size)
+        # # First pass: collect statistics (only for training data)
+        # if is_train:
+        #     print("Pass 1/2: Collecting statistics...")
+        #     chunk_iter = pd.read_csv(file_path, chunksize=self.chunk_size)
 
-            start_time = time.time()
-            with tqdm(total=total_chunks, desc="Statistics") as pbar:
-                for i, chunk in enumerate(chunk_iter):
-                    chunk_start = time.time()
+        #     start_time = time.time()
+        #     with tqdm(total=total_chunks, desc="Statistics") as pbar:
+        #         for i, chunk in enumerate(chunk_iter):
+        #             chunk_start = time.time()
 
-                    chunk = self.reduce_memory_usage(chunk)
-                    chunk = self.engineer_features(chunk)
-                    self.collect_statistics_chunk(chunk)
+        #             chunk = self.reduce_memory_usage(chunk)
+        #             chunk = self.engineer_features(chunk)
+        #             self.collect_statistics_chunk(chunk)
 
-                    # Update progress
-                    chunk_time = time.time() - chunk_start
-                    pbar.set_postfix({
-                        'chunk_time': f'{chunk_time:.1f}s',
-                        'rows/s': f'{len(chunk)/chunk_time:.0f}',
-                        'mem': f'{chunk.memory_usage().sum()/1024**2:.1f}MB'
-                    })
-                    pbar.update(1)
+        #             # Update progress
+        #             chunk_time = time.time() - chunk_start
+        #             pbar.set_postfix({
+        #                 'chunk_time': f'{chunk_time:.1f}s',
+        #                 'rows/s': f'{len(chunk)/chunk_time:.0f}',
+        #                 'mem': f'{chunk.memory_usage().sum()/1024**2:.1f}MB'
+        #             })
+        #             pbar.update(1)
 
-                    # Force garbage collection
-                    del chunk
-                    gc.collect()
+        #             # Force garbage collection
+        #             del chunk
+        #             gc.collect()
 
-            elapsed = time.time() - start_time
-            print(f"Statistics collection completed in {elapsed:.1f}s ({total_rows/elapsed:.0f} rows/s)")
+        #     elapsed = time.time() - start_time
+        #     print(f"Statistics collection completed in {elapsed:.1f}s ({total_rows/elapsed:.0f} rows/s)")
 
-            # Fit encoders after collecting all statistics
-            self.fit_encoders()
+        #     # Fit encoders after collecting all statistics
+        #     self.fit_encoders()
 
-            # Save encoders
-            self.save_encoders("encoders.pkl")
-        else:
-            # Load encoders for test data
-            self.load_encoders("encoders.pkl")
+        #     # Save encoders
+        #     self.save_encoders("encoders.pkl")
+        # else:
+        #     # Load encoders for test data
+        #     self.load_encoders("encoders.pkl")
 
         # Second pass: transform data
         print("Pass 2/2: Transforming data...")
@@ -469,7 +469,7 @@ if __name__ == "__main__":
 
         # Process training data
         print("Processing training data...")
-        train_chunks = preprocessor.process_file_in_chunks("ctr_train_sample.csv", "data/train_processed", is_train=True)
+        train_chunks = preprocessor.process_file_in_chunks("ctr_train.csv", "data/train_processed", is_train=True)
 
         # Process test data
         print("Processing test data...")
