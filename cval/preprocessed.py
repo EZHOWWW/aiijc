@@ -19,12 +19,13 @@ from category_encoders import TargetEncoder
 from imblearn.over_sampling import SMOTE
 from sklearn.feature_extraction import FeatureHasher
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-
+import psutil
+import os
 warnings.filterwarnings("ignore")
 
 # %%
 random_state = 42
-CHUNK_SIZE = 50_000
+CHUNK_SIZE = 100_000
 
 # %%
 class MemoryEfficientCTRPreprocessor:
@@ -33,7 +34,8 @@ class MemoryEfficientCTRPreprocessor:
         self.target_encoders = {}
         self.label_encoders = {}
         self.scaler = StandardScaler()
-        self.feature_hasher = FeatureHasher(n_features=40, input_type="string")
+        self.n_features_hasher =20
+        self.feature_hasher = FeatureHasher(n_features=self.n_features_hasher, input_type="string")
 
         # Статистики для target encoding
         self.target_stats = {}
@@ -195,7 +197,7 @@ class MemoryEfficientCTRPreprocessor:
                 mapping = dict(zip(le.classes_, le.transform(le.classes_)))
                 chunk_df[f"{col}_label"] = chunk_df[col].astype(str).map(mapping).fillna(-1).astype(np.int16)
 
-        # Hash encoding for high cardinality features
+        # # Hash encoding for high cardinality features
         high_cardinality = ["device_id", "device_ip"]
         for col in high_cardinality:
             if col in chunk_df.columns:
@@ -203,21 +205,20 @@ class MemoryEfficientCTRPreprocessor:
                 freq_map = chunk_df[col].value_counts().to_dict()
                 chunk_df[f"{col}_freq"] = chunk_df[col].map(freq_map).astype(np.int16)
 
+                del freq_map
+
                 # Hash encoding - batch processing
                 input_data = chunk_df[col].astype(str).values.reshape(-1, 1)
                 hashed_data = self.feature_hasher.transform(input_data)
 
-                # Convert to DataFrame more efficiently
-                hashed_df = pd.DataFrame(
-                    hashed_data.toarray().astype(np.float32),
-                    columns=[f"{col}_hash_{i}" for i in range(40)],
-                    index=chunk_df.index
-                )
-                chunk_df = pd.concat([chunk_df, hashed_df], axis=1)
+                for i in range(self.n_features_hasher):
+                    chunk_df[f"{col}_hash_{i}"] = hashed_data.toarray().astype(np.float64)[:, i]
+                del input_data, hashed_data
 
         # Drop original categorical columns
         cols_to_drop = medium_cardinality + low_cardinality + high_cardinality
         chunk_df = chunk_df.drop(columns=cols_to_drop, errors="ignore")
+        gc.collect()
 
         return chunk_df
 
@@ -231,46 +232,46 @@ class MemoryEfficientCTRPreprocessor:
         print(f"Total rows: {total_rows:,}, Total chunks: {total_chunks}")
 
         # # First pass: collect statistics (only for training data)
-        # if is_train:
-        #     print("Pass 1/2: Collecting statistics...")
-        #     chunk_iter = pd.read_csv(file_path, chunksize=self.chunk_size)
+        if is_train:
+            print("Pass 1/3: Collecting statistics...")
+            chunk_iter = pd.read_csv(file_path, chunksize=self.chunk_size)
 
-        #     start_time = time.time()
-        #     with tqdm(total=total_chunks, desc="Statistics") as pbar:
-        #         for i, chunk in enumerate(chunk_iter):
-        #             chunk_start = time.time()
+            start_time = time.time()
+            with tqdm(total=total_chunks, desc="Statistics") as pbar:
+                for i, chunk in enumerate(chunk_iter):
+                    chunk_start = time.time()
 
-        #             chunk = self.reduce_memory_usage(chunk)
-        #             chunk = self.engineer_features(chunk)
-        #             self.collect_statistics_chunk(chunk)
+                    chunk = self.reduce_memory_usage(chunk)
+                    chunk = self.engineer_features(chunk)
+                    self.collect_statistics_chunk(chunk)
 
-        #             # Update progress
-        #             chunk_time = time.time() - chunk_start
-        #             pbar.set_postfix({
-        #                 'chunk_time': f'{chunk_time:.1f}s',
-        #                 'rows/s': f'{len(chunk)/chunk_time:.0f}',
-        #                 'mem': f'{chunk.memory_usage().sum()/1024**2:.1f}MB'
-        #             })
-        #             pbar.update(1)
+                    # Update progress
+                    chunk_time = time.time() - chunk_start
+                    pbar.set_postfix({
+                        'chunk_time': f'{chunk_time:.1f}s',
+                        'rows/s': f'{len(chunk)/chunk_time:.0f}',
+                        'mem': f'{chunk.memory_usage().sum()/1024**2:.1f}MB'
+                    })
+                    pbar.update(1)
 
-        #             # Force garbage collection
-        #             del chunk
-        #             gc.collect()
+                    # Force garbage collection
+                    del chunk
+                    gc.collect()
 
-        #     elapsed = time.time() - start_time
-        #     print(f"Statistics collection completed in {elapsed:.1f}s ({total_rows/elapsed:.0f} rows/s)")
+            elapsed = time.time() - start_time
+            print(f"Statistics collection completed in {elapsed:.1f}s ({total_rows/elapsed:.0f} rows/s)")
 
-        #     # Fit encoders after collecting all statistics
-        #     self.fit_encoders()
+            # Fit encoders after collecting all statistics
+            self.fit_encoders()
 
-        #     # Save encoders
-        #     self.save_encoders("encoders.pkl")
-        # else:
-        #     # Load encoders for test data
-        #     self.load_encoders("encoders.pkl")
+            # Save encoders
+            self.save_encoders("encoders.pkl")
+        else:
+            # Load encoders for test data
+            self.load_encoders("encoders.pkl")
 
-        # Second pass: transform data
-        print("Pass 2/2: Transforming data...")
+        # Second pass: transform data and collect numerical statistics
+        print("Pass 2/3: Transforming data and collecting numerical statistics...")
         chunk_iter = pd.read_csv(file_path, chunksize=self.chunk_size)
 
         processed_chunks = []
@@ -348,11 +349,18 @@ class MemoryEfficientCTRPreprocessor:
                 })
                 pbar.update(1)
 
-                # Force garbage collection
                 del chunk, X_chunk
                 if y_chunk is not None:
                     del y_chunk
                 gc.collect()
+                def print_memory_usage():
+                    process = psutil.Process(os.getpid())
+                    memory_info = process.memory_info()
+                    print(f"Memory usage: {memory_info.rss / 1024 / 1024:.1f} MB")
+                # Добавьте периодическую очистку каждые 10 чанков
+                if i % 5 == 0:
+                    gc.collect()
+                    print_memory_usage()
 
         elapsed = time.time() - start_time
         print(f"Transformation completed in {elapsed:.1f}s ({total_rows/elapsed:.0f} rows/s)")
@@ -371,29 +379,27 @@ class MemoryEfficientCTRPreprocessor:
             # Load scaler for test data
             self.scaler = joblib.load("scaler.pkl")
 
-        # Apply scaling to all chunks
+        # Third pass: Apply scaling to all chunks
         print("Pass 3/3: Applying scaling...")
         start_time = time.time()
         with tqdm(total=len(processed_chunks), desc="Scaling") as pbar:
             for i in processed_chunks:
                 chunk_start = time.time()
 
+                # Загружаем чанк
                 X_chunk = pd.read_parquet(f"{output_path}_X_chunk_{i}.parquet")
 
+                # Применяем масштабирование
                 numerical_cols = X_chunk.select_dtypes(include=[np.number]).columns
                 if len(numerical_cols) > 0:
                     X_chunk[numerical_cols] = self.scaler.transform(X_chunk[numerical_cols])
 
-                # Save scaled chunk with reset index
+                # Сохраняем масштабированный чанк
                 X_chunk = X_chunk.reset_index(drop=True)
                 X_chunk.to_parquet(f"{output_path}_X_chunk_{i}_scaled.parquet", index=False)
 
-                numerical_cols = X_chunk.select_dtypes(include=[np.number]).columns
-                if len(numerical_cols) > 0:
-                    X_chunk[numerical_cols] = self.scaler.transform(X_chunk[numerical_cols])
-
-                # Save scaled chunk
-                X_chunk.to_parquet(f"{output_path}_X_chunk_{i}_scaled.parquet")
+                # Удаляем немасштабированный чанк с диска чтобы освободить место
+                os.remove(f"{output_path}_X_chunk_{i}.parquet")
 
                 # Update progress
                 chunk_time = time.time() - chunk_start
@@ -403,7 +409,6 @@ class MemoryEfficientCTRPreprocessor:
                 })
                 pbar.update(1)
 
-                # Clean up
                 del X_chunk
                 gc.collect()
 
