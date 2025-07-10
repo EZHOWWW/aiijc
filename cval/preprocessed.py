@@ -466,39 +466,56 @@ class MemoryEfficientCTRPreprocessor:
 
         return X, y
 
+# %%
 # Usage example
-if __name__ == "__main__":
-    try:
-        print("Initializing memory-efficient preprocessor...")
-        preprocessor = MemoryEfficientCTRPreprocessor(chunk_size=CHUNK_SIZE)
+try:
+    print("Initializing memory-efficient preprocessor...")
+    preprocessor = MemoryEfficientCTRPreprocessor(chunk_size=CHUNK_SIZE)
 
-        # Process training data
-        print("Processing training data...")
-        train_chunks = preprocessor.process_file_in_chunks("ctr_train.csv", "data/train_processed", is_train=True)
+    # Process training data
+    print("Processing training data...")
+    train_chunks = preprocessor.process_file_in_chunks("ctr_train.csv", "data/train_processed", is_train=True)
 
-        # Process test data
-        print("Processing test data...")
-        test_chunks = preprocessor.process_file_in_chunks("ctr_test.csv", "data/test_processed", is_train=False)
+    # Process test data
+    print("Processing test data...")
+    test_chunks = preprocessor.process_file_in_chunks("ctr_test.csv", "data/test_processed", is_train=False)
+except:
+    import traceback
+    print(traceback.format_exc())
+# %%
+# Example: Load first few chunks for training
+print("Loading processed chunks for training...")
+X_train, y_train = preprocessor.load_processed_chunks("data/train_processed", train_chunks[:3])  # Load first 3 chunks
 
-        # Example: Load first few chunks for training
-        print("Loading processed chunks for training...")
-        X_train, y_train = preprocessor.load_processed_chunks("data/train_processed", train_chunks[:3])  # Load first 3 chunks
+print(f"Training data shape: {X_train.shape}")
+print(f"Class distribution: {y_train.value_counts()}")
 
-        print(f"Training data shape: {X_train.shape}")
-        print(f"Class distribution: {y_train.value_counts()}")
+# Load test data
+X_test, _ = preprocessor.load_processed_chunks("data/test_processed", test_chunks, load_target=False)
+print(f"Test data shape: {X_test.shape}")
 
-        # Load test data
-        X_test, _ = preprocessor.load_processed_chunks("data/test_processed", test_chunks, load_target=False)
-        print(f"Test data shape: {X_test.shape}")
+print("Memory-efficient preprocessing completed!")
+print("Processed data:\n=== X train ===")
+print(X_train)
+print('=== y train ===')
+print(y_train)
+print('=== x test ===')
+print(X_test)
+# print(X_train[X_train.isna().sum()])
+print(X_train.isna().sum()[X_train.isna().sum()!=0])
+print(X_test.isna().sum()[X_test.isna().sum()!=0])
 
-        print("Memory-efficient preprocessing completed!")
-        print("Processed data:\n=== X train ===")
-        print(X_train)
-        print('=== y train ===')
-        print(y_train)
-        print('=== x test ===')
-        print(X_test)
-
-    except:
-        import traceback
-        print(traceback.format_exc())
+# %%
+files = os.listdir('data')
+column_to_drop = ['app_site_match']
+for i, f in enumerate(files):
+    filepath = os.path.join('data', f)
+    df_b = pd.read_parquet(filepath)
+    is_changed = False
+    for col in column_to_drop:
+        if col in df_b.columns:
+            is_changed = True
+            df_b = df_b.drop(columns=[col])
+    if is_changed:
+        print(filepath)
+        df_b.to_parquet(filepath)
