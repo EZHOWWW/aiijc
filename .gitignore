@@ -210,3 +210,8 @@ __marimo__/
 *.csv
 *.parquet
 *.pkl
+data
+.vscode
+*.pth
+
+renders
